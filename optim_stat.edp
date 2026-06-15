@@ -1,0 +1,186 @@
+/* John Sebastian SIMON (jhsimon1729@gmail.com) */
+/* Created: April 2026 */
+
+/* This edp script contains the optimization routine for the stationary problem */
+
+include "state_sol.edp"
+
+
+real st; 									// Step size for the descent
+real coef = 1e-3; 							// Control parameter for the backtracking
+real obj, obj0;								// Placeholders for the values of the objective functional
+real frech = 0.25; 							// Evaluation of the derivative for Armijo
+real normdir;								// Checker for the H^1 norm of the descent direction
+real errop;									// Error for the optimization
+int kk;
+
+
+///////////////////////////////////////////////////////
+////////// Create folders and necessary data //////////
+///////////////////////////////////////////////////////
+
+string fold = "stat_dat_folder";
+
+string foldstate = "stat_dat_folder/state";
+
+string foldphase = "stat_dat_folder/phase";
+
+system("rm -rf "+fold+" "+foldstate+" "+foldphase);
+
+system("mkdir -p "+fold+" "+foldstate+" "+foldphase);
+
+
+
+////////////////////////////////////////////////////////
+////////// Initialize of optimization routine //////////
+////////////////////////////////////////////////////////
+
+// Initialize target velocity
+
+{ifstream gx("target/ux.txt"); gx >> udx[];
+}
+
+{ifstream gy("target/uy.txt"); gy >> udy[];
+}
+
+
+errop = tol + 1; 	// initialize error value
+
+ahat = 100;			// set interpolant weight to 100
+
+phi = 1;			// initialize phase field
+
+alphamac(phi); 		// compute alpha
+
+NSsolve; 			// compute initial NS 
+
+savevtk(foldstate+"/state0.vtu", Th, [vx,vy,0], p, order = Orderv); 		// store velocity fields and pressure for paraview
+
+savevtk(foldphase+"/phi0.vtu", Th, phi, dataname="phi", order = Order); 	// store phase-field for paraview
+
+ofstream objval(fold+"/objectivevalue.txt"); 								// initialize data storage
+
+objval.precision(16);
+
+objval << "Iterate\t" << "Previous\t" << "Current\t" << "Absolute difference\t" << "Norm of descent\t" << "Hecht\t" << "Tracking\t" << "Landau-Ginzburg\t" << "BT steps" << endl;
+
+for(int k = 0; (k < 200) && (errop > tol); k++){
+
+	obj0 = J(phi); // compute previous objective function value
+
+	ADJsolve; // compute adjoint
+
+	phsolve; // compute phase field
+
+	st = 1; // initialize step size
+
+	Mdiffphi = M*dvh[];
+
+	normdir = sqrt( tr(Mdiffphi)*dvh[] );
+
+	frech = dJ(dvh);
+
+	cout << "Frechet = "<< frech << "normdir = " << normdir <<  endl;
+
+	cout << "\n" << endl;
+	cout << "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++" << endl;
+	cout << "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++" << endl;
+	cout << "++++" << endl;
+	cout << "++++ " << "Backtracking loop " << endl;
+	cout << "++++" << endl;
+	cout << "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++" << endl;
+	cout << "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++" << endl;
+	cout << "\n" << endl;
+
+	for (kk = 0; kk <= 25; kk++){
+
+		phib = phi + st*(dvh);	// update phase-field under Armijo checking
+
+		savevtk(foldphase+"/testphi"+(k+1)+"_"+(kk)+".vtk", Th, phib, dataname="phi");
+
+		alphamac(phib);			// update alpha
+
+		NSsolve;				// compute NS
+
+		obj = J(phib);			// evaluate objective functional
+
+		cout << "Old objective = "<< obj0 << " New objective = " << obj << " Armijo = " << (coef*st*frech) << endl;
+
+		//check if ph satisfies Armijo
+		if( coef*st*frech >= (obj - obj0) ) {
+			cout << "Phase field accepted " << endl;
+			cout << "Upper bound " << (coef*st*frech) << endl;
+			cout << "Test bound " << (obj - obj0) << endl;
+			break;
+		}
+
+
+
+		st *= 0.75;
+
+	}
+
+	savevtk(foldstate+"/state"+(k+1)+".vtu", Th, [vx,vy,0], p, order = Orderv); 		// store velocity fields and pressure for paraview
+
+
+	phi = phib;
+
+	savevtk(foldphase+"/phi"+(k+1)+".vtu", Th, phi, dataname="phi", order = Order); 						// store phase-field for paraview);
+
+	he = hecht(phi);
+
+	vt = velt(phi);
+
+	LanGin = LG(phi);
+
+	errop = max(abs(frech), abs(obj0 - obj));
+
+	cout << "Criterion =  "<< errop << endl;
+
+	objval << (k+1)+"\t" << obj0+"\t" << obj+"\t" <<  abs(obj0 - obj)+"\t" <<  abs(frech)+"\t" << he+"\t" << vt+"\t" << LanGin+"\t" << kk <<endl;
+
+	cout << "========================================================================================================================================================" << endl;
+
+	cout << "Iterate\t" << "Previous\t" << "Current\t" << "Absolute difference\t" << "Norm of descent\t" << "Hecht\t" << "Tracking\t" << "Landau-Ginzburg\t" << endl;
+
+	cout << (k+1)+"\t" << obj0+"\t" << obj+"\t" <<  abs(obj0 - obj)+"\t" <<  abs(frech)+"\t" << he+"\t" << vt+"\t" << LanGin+"\t" << endl;
+
+
+
+}
+
+objval.flush;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

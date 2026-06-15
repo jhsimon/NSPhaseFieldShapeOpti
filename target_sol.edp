@@ -1,0 +1,59 @@
+/* John Sebastian SIMON (jhsimon1729@gmail.com) */
+/* Created: April 2026 */
+
+/* 	This edp script tests init_script.edp and compute the target velocity u_d	*/
+
+
+include "init_script.edp"
+
+
+
+/////////////////////////////////////////////////////////////
+////////// Initializing place holders and matrices //////////
+/////////////////////////////////////////////////////////////
+
+Xh [w1, w2, wp] = [1,1,1];		//place holder for the solution
+sol = w1[];						//fixing dimensionality
+
+phi = -( phi0(-(1./(epsilon*10))*( (1./0.1)*( 0.25*(x-1.5)^2 + 0.81*(y-0.5)^2 )^(0.5) - 1  ) + 1 ) ); 	// Define the target phase-field
+alphamac(phi);																							// Compute the interpolant
+
+A = a(Xh,Xh,  solver = "UMFPACK");																		// assemble the LHS matrix except the Brinkman term for Stokes
+Aphi = aphi(Xh,Xh,  solver = "UMFPACK");																// assemble the Brinkman term
+rhs = bb(0,Xh);																							// rhs of the Stokes equations
+b = bc(0,Xh);																							// bc for the Stokes equations
+
+
+
+//////////////////////////////////////////////////
+////////// Resolving the linear problem //////////
+//////////////////////////////////////////////////
+
+A += Aphi;											// complete LHS for the Stokes equations
+rhs += b;											// rhs and the boundary condition combined to resolve the Stokes equations
+sold = A^-1 * b; 
+
+w1[] = sold; udx = w1; udy = w2; p = wp;			// allocating the solutions of the Stokes equations
+
+plot([udx,udy]);									// visualizing the solution
+
+real H1 = sqrt(int2d(Th)( tr(GRAD(udx,udy))*GRAD(udx,udy) ));
+
+cout << "H^1 norm for the target velocity: " << H1 << endl;
+
+//////////////////////////////////////
+////////// Storing the data //////////
+//////////////////////////////////////
+
+
+system("rm -rf target");
+system("mkdir -p target");
+
+{ofstream fx("target/ux.txt"); fx << udx[] << endl; 		// storing x-component of the target velocity
+}
+
+{ofstream fy("target/uy.txt"); fy << udy[] << endl;			// storing y-component of the target velocity
+}
+
+savevtk("target/velocity.vtu", Th, [udx,udy,0], p, order = Orderv); 		// store velocity fields and pressure for paraview
+savevtk("target/targ_phi.vtu", Th, phi, order = Order); 					// store phase-field for paraview

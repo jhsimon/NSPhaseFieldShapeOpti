@@ -1,0 +1,369 @@
+/* John Sebastian SIMON (jhsimon1729@gmail.com) */
+/* Created: April 2026 */
+
+/* 	This edp script introduces the macros, varfs, and initialization of the PDEs used in solving the 
+	Shape Optimization Problem Constrained with the Stationary Navier--Stokes equations		*/
+
+
+load "iovtk"
+include "getARGV.idp"
+
+
+//////////////////////////////////////////
+////////// Numerical Parameters //////////
+//////////////////////////////////////////
+
+real tol = 1e-6; 				              // tolerance or some arbitrary small number 
+real mu = 1; 					                // kinematic viscosity 
+real epsilon = 0.0075; 			          // parameter for the phase field 
+real alp = 0.1; 				              // parameter for Brinkman term 
+real c = 15.0; 					              // penalty parameter for the PDAS
+real lambda = 1; 				              // weight parameter for the tracking functional
+real gamma = 0.01; 			              // weight parameter for the Ginzburg-Landau free energy
+real err, errold; 				            // error place holder
+real ahat = 500; 				              // multiplier for the Brinkman term 
+real c0 = pi;					                // parameter for the Ginzburg-Landau free energy
+int nn = 200; 					              // number of discretizations on a side of the square
+int n;
+int maxiter = 200; 				            // max iteration for PDAS
+real he;						                  // holder for the Hecht (Brinkman) term in the Objective Functional
+real vt;						                  // holder for the tracking term in the Objective Functional
+real LanGin;					                // holder for the Ginzburg--Landau in the Objective Functional
+real T = getARGV("--time", 0.5);      // time horizon
+real dt = 0.01;                       // time discretization
+real m = T/dt;                        // number of intervals
+real tinv = 1./dt;                    // reciprocal of the discretization
+real t0,t1,t5,t6;				              // holders for time tracking 
+int[int] Order = [1];                 // Order for paraview
+int[int] Orderv = [1, 1, 1, 1];       // Order for paraview
+int isitime = 0;                         // Boolean to indicate if we are solving the time-dependent or the stationary problem
+
+
+
+
+////////////////////////////////////////
+////////// Domain declaration //////////
+////////////////////////////////////////
+
+
+/* Border Labels */
+real bottom = 1;
+real right = 2;
+real top = 3;
+real left = 4;
+
+
+mesh Th = square(3*nn,nn, [3*x,y]); // domain declaration
+
+
+
+
+
+/////////////////////////////////////////////////////////////////////////
+////////// Finite element spaces and matrix and vector holders //////////
+/////////////////////////////////////////////////////////////////////////
+
+
+// Defining FE-spaces
+fespace Vh(Th, P1b);
+fespace Phb(Th, P1b);
+fespace Ph(Th, P1);
+fespace Po(Th, P0);
+fespace Xh(Th, [P1b,P1b,P1]);
+
+Po h = hTriangle;
+cout << "size of mesh = " << h[].max << endl;
+
+
+
+
+
+/////////////////////////////////////
+////////// Dynamics Macros //////////
+/////////////////////////////////////
+
+macro grad(u) 	[dx(u), dy(u)] // EOM
+macro UgradV(u1,u2,v1,v2) [ [u1,u2]'*[dx(v1),dy(v1)] , [u1,u2]'*[dx(v2),dy(v2)] ]// EOM
+macro GRAD(u,v) [dx(u), dy(u), dx(v), dy(v)] //EOM 
+macro curl(u,v) (dx(v) - dy(u)) //EOM
+macro div(u,v) (dx(u)+dy(v)) // EOM
+macro detgrad(u,v) (dx(u)*dy(v)-dx(v)*dy(u)) // EOM
+macro tr(M) M' //EOM /*'*/
+macro GRN(u, v) [dx(u)*N.x + dy(u)*N.y, dx(v)*N.x + dy(v)*N.y] // EOM
+macro GRNP(u, v) [dy(v)*N.x - dx(v)*N.y, dx(u)*N.y - dy(u)*N.x] // EOM
+macro dotN(u1,u2) (u1*N.x+u2*N.y) //EOM
+macro g(u,v) max( g2, detgrad(u,v)*detgrad(u,v)*detgrad(u,v)/( 1 + detgrad(u,v)*detgrad(u,v) ) ) // EOM
+macro derg(u,v) ((detgrad(u,v)^4+3*detgrad(u,v)^2)/( 1 + detgrad(u,v)*detgrad(u,v) )^2 ) //EOM
+macro R(u,v) [-curl(derg(u,v)*grad(v)) , curl(derg(u,v)*grad(u))] //EOM
+
+
+
+
+
+
+
+/////////////////////////////////////
+////////// Finite elements //////////
+/////////////////////////////////////
+
+Vh vx,vy;										            // Solution to the state equation
+Vh vax, vay;									          // Solution to the adjoint equations
+Vh vxold,vyold;									        // Holder for the state equation from the previous Newton/time step
+Vh vaxold,vayold;                       // Holder for the adjoint equation from the previous Newton/time step
+Vh vxn,vyn;                             // Holder for the state equation for the next Newton/time step
+Vh wx,wy;										            // Test variables for the velocity field
+Ph p,q, pa, pold;								        // Pressure variables
+Vh udx,udy;										          // Holder for the target velocity
+Vh gleft = ( 1 - (y-0.5)^2 ); 					// Dirichlet data on the rleft border
+Vh gright = ( 1 - (y-0.5)^2 ); 					// Dirichlet data on the right border
+Vh g1,g2;                               // Holder for the RHS of the time-dependent adjoint due to the O.F.
+Ph alpha; 										          // Interpolant for the Brinkman term
+Ph phi;											            // Phase-field function (used only in the optimization routine)
+Ph phib;                                // Place holder for the new phase field in the optimization
+Ph uh, uhp;										          // Solution to PDAS (uh is the current approximation; uhp is the previous PDAS approximation)
+Ph dvh;											            // Difference between two consecutive PDAS iterates
+Ph vh;											            // Test function for PDAS
+Ph Ikp, Ikm, Ik;								        // Inactive sets for PDAS
+Po Akp, Akm;									          // Active sets for PDAS
+real gp = 1;									          // Upper constraint for PDAS
+real gm = -1;									          // Lower constraint for PDAS
+Po lambdav = 0;									        // Penalty parameter for PDAS
+Ph f;											              // RHS for PDAS due to the optimality
+Vh[int] uxt(m+1), uyt(m+1);             // For storing the solution to the time-dependent NS
+Vh[int] uax(m+1), uay(m+1);             // For storing the solution to the time-dependent Adjoint
+
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+////////// First order approximation of Phase-fields and the Brinkman Interpolation //////////
+//////////////////////////////////////////////////////////////////////////////////////////////
+
+
+/* For initializing phase field */
+func real phi0(real t){
+    return (sin(t))*( abs(t) <= pi/2 ) + (sign(t))*( abs(t) > pi/2 );
+} 
+
+/* Macro for defining the porous media approx based on the phase field */
+macro alphamac(phi) {
+  alpha = (alp/(2*epsilon))*(1-phi) + (0)*( phi > 1) + (alp/2)*( phi < -1 );
+} //EOF
+
+
+
+
+///////////////////////////////////////////////////////////
+////////// Defining varf for the linear problems //////////
+///////////////////////////////////////////////////////////
+
+
+
+
+// +++++++++ Navier-Stokes equations +++++++++ //
+
+
+/* varf for the Stokes problem */
+varf a([vx,vy,p],[wx,wy,q]) = int2d(Th)( mu*tr(GRAD(vx,vy))*GRAD(wx,wy) )
+  - int2d(Th)( p*div(wx,wy) )
+  - int2d(Th)( q*div(vx,vy) )
+  - int2d(Th)( p*q*tol )
+  + on(bottom, vx = 0, vy = 0)
+  + on(left, vx = 0, vy = 0)
+  + on(right, vx = 0, vy = 0)
+  + on(top, vx = 0, vy = 0);
+
+
+/*varf for the time derivative part*/
+varf vmass([vx,vy,p],[wx,wy,q]) = int2d(Th)( tinv*( vx*wx + vy*wy ) );
+
+
+/* varf for the convective part problem */
+varf aconv([vx,vy,p],[wx,wy,q]) = int2d(Th)( tr(UgradV( vxold,vyold,vx,vy ))*[wx,wy] )
+  + int2d(Th)( (1-isitime)*tr(UgradV( vx,vy,vxold,vyold))*[wx,wy] );
+
+
+/* varf for the Brinkman term */
+varf aphi([vx,vy,p],[wx,wy,q]) = int2d(Th)( ahat*alpha*( vx*wx + vy*wy ) );
+
+
+/* varf for the linearization for Newton's method problem */
+varf a2([vx,vy,p],[wx,wy,q]) = -int2d(Th)( mu*tr(GRAD(vxold,vyold))*GRAD(wx,wy) )
+  - int2d(Th)( tr(UgradV( vxold,vyold,vxold,vyold))*[wx,wy] )
+  - int2d(Th)( ahat*alpha*( vxold*wx + vyold*wy ) )
+  + int2d(Th)( pold*div(wx,wy) )
+  + int2d(Th)( q*div(vxold,vyold) )
+  + int2d(Th)( pold*q*tol );
+
+
+
+/* varf for the rhs of the NS problem */
+varf bb([vx,vy,p],[wx,wy,q]) = int2d(Th)( tinv*( vxold*wx + vyold*wy ) );
+
+
+/* varf for the bc of the NSproblem */
+varf bc([vx,vy,p],[wx,wy,q]) = on(bottom, vx = 0, vy = 0)
+  + on(left, vx = gleft, vy = 0)
+  + on(right, vx = gleft, vy = 0)
+  + on(top, vx = 0, vy = 0);
+
+
+/* varf for the stiffness matrix of the stokes problem */
+varf vstiff([vx,vy,p],[wx,wy,q]) = int2d(Th)( tr(GRAD(vx,vy))*GRAD(wx,wy) ) ;
+
+
+
+
+// +++++++++ Adjoint equations +++++++++ //
+
+
+/* varf for the adjoint problem */
+varf adj([vax,vay,pa],[wx,wy,q]) = int2d(Th)(mu*tr(GRAD(vax,vay))*GRAD(wx,wy)
+  - div(vax,vay)*q - div(wx,wy)*pa
+  + tol*pa*q)
+  + on(1,2,3,4, vax = 0, vay = 0);
+
+/*varf for the time derivative */
+varf adjvmass([vax,vay,pa],[wx,wy,q]) = int2d(Th)( tinv*( vax*wx + vay*wy ) );
+
+/* varf for the Brinkman and the convective terms for the adjoint */
+varf adjphi([vax,vay,pa],[wx,wy,q]) = int2d(Th)( ahat*alpha*( vax*wx + vay*wy ) ) 
+	+ int2d(Th)( tr(UgradV(wx,wy, vx, vy))*[vax,vay] )
+ 	+ int2d(Th)( tr(UgradV(vx,vy,wx,wy))*[vax,vay] );
+
+
+/* varf for the rhs of the adjoint */
+varf adjbb([vax,vay,pa],[wx,wy,q]) = int2d(Th)( 2*alpha*( (vx)*wx + (vy)*wy ) )
+  + int2d(Th)( lambda*(1+phi)*( (vx - udx)*wx + (vy - udy)*wy ) );
+
+
+/* varf for the bc of the adjoint */
+varf adjbc([vax,vay,p],[wx,wy,q]) = on(1,2,3,4, vax = 0, vay = 0);
+
+/* varf for the RHS of the time dependent adjoint */
+varf adjtimebb([vax,vay,p],[wx,wy,q]) = int2d(Th)( tinv*( vaxold*wx + vayold*wy ) + tr(UgradV(wx,wy, vaxold, vayold))*[vxold,vyold] )
+  + int2d(Th)( g1*wx + g2*wy );
+
+/* varf for the Brinkman and the convective terms for the time-dependent adjoint */
+varf adjtimephi([vax,vay,pa],[wx,wy,q]) = int2d(Th)( ahat*alpha*( vax*wx + vay*wy ) ) 
+  + int2d(Th)( tr(UgradV(vxn,vyn, wx, wy))*[vax,vay] );
+
+
+// +++++++++ PDAS Resolution +++++++++ //
+
+
+/* varf for the phase field */
+varf aaphi(uh, vh) = int2d(Th)(  gamma*(epsilon/(c0))*(dx(uh)*dx(vh) + dy(uh)*dy(vh)) )+ int2d(Th)( Akp* c * uh*vh )
+  + int2d(Th)( Akp*(lambdav - c*(  gp ))*vh )
+  + int2d(Th)( Akm* c * uh*vh )
+  + int2d(Th)( Akm*(lambdav - c*(  gm ))*vh )
+  + int2d(Th)( f*vh )
+  + int2d(Th)( (gamma/(c0*epsilon))*(-phi)*vh )
+  + on(top,bottom, uh = gp);
+
+/* varf for the bc of the phase field */
+varf aabc(uh, vh) = on(top,bottom, uh = gp);
+
+
+/* varf for the mass matrix for error computation */
+varf mass(uh,vh) =  int2d(Th)( uh*vh );
+
+/* varf for the stiffness matrix for error computation */
+varf stiff(uh,vh) =  int2d(Th)( dx(uh)*dx(vh) + dy(uh)*dy(vh) );
+
+
+
+////////////////////////////////////////////////////////////////////
+////////// Defining global matrices for error computation //////////
+////////////////////////////////////////////////////////////////////
+
+matrix A = a(Xh,Xh,  solver = "UMFPACK");						    // Matrix for the stokes part
+matrix Am = vmass(Xh,Xh,  solver = "UMFPACK");          // Matrix for the time derivative
+matrix Aphi = aphi(Xh,Xh,  solver = "UMFPACK");					// Matrix for the Brinkman
+matrix Aconv = aconv(Xh,Xh, solver = "UMFPACK");				// for the convective part
+real[int] lin = a2(0,Xh);										            // for the rhs due to Newton
+real[int] rhs = bb(0,Xh);										            // rhs of the NS
+real[int] b = bc(0,Xh);											            // bc for the NS
+
+matrix Adj = adj(Xh,Xh, solver = "UMFPACK");					  // for the adjoint
+matrix Adjphi = adjphi(Xh,Xh, solver = "UMFPACK");			// for the Brinkman term of the adjoint
+real[int] adjrhs = adjbb(0,Xh);									        // for the rhs of the adjoint
+real[int] adjb = adjbc(0,Xh);									               // for the bc of the adjoint
+
+matrix Mphi = aaphi(Ph,Ph);										              // for PDAS
+real[int] rhsphi = aaphi(0,Ph);									            // for the bc of PDAS
+real[int] bcphi = aabc(0,Ph);
+
+matrix S = vstiff(Xh,Xh, solver = "UMFPACK");					     // Matrix for computing Newton error
+matrix M = mass(Ph,Ph, solver=UMFPACK);							       // Matrix for the computation of PDAS error
+
+real[int] Mdiff(Xh.ndof), Mdiffold(Xh.ndof);					     // Matrices for the computation of the H^1-norm of the NS solutions (Mdiff is the Stiffness matrix of the current velocity, and Mdiffold is that of the previous Newton step)
+real[int] sol(Xh.ndof), solold(Xh.ndof), sold(Xh.ndof); 	 // vectors for storing the solutions of the NS equations (sol -- current, sold -- solution from previous Newton step, sold -- for storing the desired velocity)
+real[int] solphi(Ph.ndof), solphiold(Ph.ndof);					   // Vector for storing the solution to PDAS (solphi -- current, solphiold -- solution from previous PDAS step)
+real[int] Mdiffphi(Ph.ndof);									             // Matrix for computing the error in PDAS
+
+
+
+
+/////////////////////////////////////////////////////////
+////////// Macros for the optimization problem //////////
+/////////////////////////////////////////////////////////
+
+/* Macro for computing the objective function */
+macro J(phi) 
+  int2d(Th)( alpha*( vx^2 + vy^2 ) ) + (1./2)*int2d(Th)( lambda*(1+phi)*( (vx - udx)^2 + (vy - udy)^2 )  )
+  + gamma*(1./c0)*( (epsilon/2)*int2d(Th)( dx(phi)^2 + dy(phi)^2 ) + ( 1/(epsilon) )*int2d(Th)( (1./2)*( 1 - phi^2 ) ) ) //EOM
+
+
+/* Macro for computing the tracking term */
+macro velt(phi) (1./2)*int2d(Th)( (1+phi)*( (vx - udx)^2 + (vy - udy)^2 )  ) // EOM
+
+/* Macro for computing the Brinkman term */
+macro hecht(phi) int2d(Th)( alpha*( vx^2 + vy^2 ) ) // EOM
+
+/* Macro for computing the Ginzburg--Landau free energy */
+macro LG(phi) (1./c0)*( (epsilon/2)*int2d(Th)( dx(phi)^2 + dy(phi)^2 ) + ( 1/(epsilon) )*int2d(Th)( (1./2)*( 1 - phi^2 ) ) ) // EOM
+
+/* Macro for computing the gradient of the objective function */
+macro dJ(dvh) gamma*(1./c0)*( (epsilon)*int2d(Th)( dx(phi)*dx(dvh) + dy(phi)*dy(dvh) ) + ( 1/(epsilon) )*int2d(Th)( ( - phi )*( dvh ) ) )
+              + int2d(Th)( f*dvh ) // EOM
+
+
+
+/* Macro for computing the objective functional and its respective components */
+
+macro timeJ(phi){
+
+  he = int2d(Th)( alpha*( uxt[0]^2 + uyt[0]^2 ) ) + int2d(Th)( alpha*( uxt[m]^2 + uyt[m]^2 ) );
+  he *= 0.5;
+
+  vt = (1./2)*int2d(Th)( lambda*(1+phi)*( (uxt[0] - udx)^2 + (uyt[0] - udy)^2 )  ) + (1./2)*int2d(Th)( lambda*(1+phi)*( (uxt[m] - udx)^2 + (uyt[m] - udy)^2 )  );
+  vt *= 0.5;
+
+  for(int i = 1; i<= m-1; i++){
+
+      he = he + int2d(Th)( alpha*( uxt[i]^2 + uyt[i]^2 ) );
+      vt = vt + (1./2)*int2d(Th)( lambda*(1+phi)*( (uxt[i] - udx)^2 + (uyt[i] - udy)^2 )  );
+
+  }
+
+  he = he*dt*(1./T);
+
+  vt = vt*dt*(1./T);
+
+  LanGin = (1./c0)*( (epsilon/2)*int2d(Th)( dx(phi)^2 + dy(phi)^2 ) + ( 1/(epsilon) )*int2d(Th)( (1./2)*( 1 - phi^2 ) ) );
+
+  Jt = he + vt + gamma*LanGin;
+  
+  
+} //
+
+
+
+
+
+
+
+
+
+
+

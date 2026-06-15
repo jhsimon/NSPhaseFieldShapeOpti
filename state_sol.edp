@@ -1,0 +1,367 @@
+/* John Sebastian SIMON (jhsimon1729@gmail.com) */
+/* Created: April 2026 */
+
+/* 	This edp script defines the iterative process of Newton's method and PDAS	*/
+
+
+include "init_script.edp"
+
+Xh [w1, w2, wp] = [1,1,1];		// place holder for the solution
+sol = w1[];						// fixing dimensionality
+
+
+////////////////////////////////////////////////////////
+////////// Defining macro for Newton's method //////////
+////////////////////////////////////////////////////////
+
+
+macro NSsolve{
+
+	err = 1;																/* set err to 1 */
+
+	Aphi = aphi(Xh,Xh); 													/* Update Aphi as it changes at eat VMPT step */
+
+
+	gleft = gright; 														/* set Dirichlet for the initialization */
+
+	vxold = 0; vyold = 0; pold = 0; 										/* initialize for solving Stokes equations */
+
+	cout << "\n" << endl;
+	cout << "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++" << endl;
+	cout << "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++" << endl;
+	cout << "++++" << endl;
+	cout << "++++ " << "Initializing Stokes for Newton " << endl;
+	cout << "++++" << endl;
+	cout << "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++" << endl;
+	cout << "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++" << endl;
+	cout << "\n" << endl;
+
+	Aconv = aconv(Xh,Xh);													/* Updating convectice matrix as a placeholder for Stokes equations */
+	Aconv += A; Aconv += Aphi; 												/* Combining the matrices for the Stokes equations */
+	set(Aconv, solver = "UMFPACK");											/* Make sure the direct solver is UMFPACK */
+
+	lin = a2(0,Xh);   														/* Assmble the right-hand side as a placeholder for the Stokes equations */
+	b = bc(0,Xh);     														/* Vector corresponding to the boundary conditions */
+
+	lin += b; 																/* Combining RHS and the boundary conditions*/
+	sol = Aconv^-1 * lin;   												/* Solving the linear system */
+
+	w1[] = sol; vxold = w1; vyold = w2; pold = wp; 							/* alot the data to velocity and pressure components */
+
+	solold = sol; 															/* save sol for computing error later*/
+
+	Mdiffold = S*solold;                  									/* storing L^2 norm */
+	errold = sqrt( tr(Mdiffold)*solold);  									/* for stopping criterion*/
+
+	gleft = 0; 																/* update Dirichlet data for the Frechet */
+
+	cout << "\n" << endl;
+	cout << "****************************************************************" << endl;
+	cout << "******************* Entering loop for Newton *******************" << endl;
+	cout << "****************************************************************" << endl;
+	cout << "\n" << endl;
+
+	for(n=0; n<100; n++){
+
+	  Aconv = aconv(Xh,Xh); 												/* update convective matrix */
+	  Aconv += A; Aconv += Aphi; 											/* update matrix */
+	  set(Aconv, solver = "UMFPACK");										/* Make sure the direct solver is UMFPACK */
+
+	  lin = a2(0,Xh);   													/* Assmble the right-hand side as a placeholder for the Stokes equations */
+	  b = bc(0,Xh);     													/* Vector corresponding to the boundary conditions */
+
+	  lin += b; 															/* Combining RHS and the boundary conditions*/
+	  sol = Aconv^-1 * lin;   												/* Solving the linear system */
+
+	  w1[] = sol; vx = w1; vy = w2; p = wp;									/* Alot the data to velocity and pressure components */
+	  vxold[] += vx[]; vyold[] += vy[]; pold[] += p[];						/* Compute the Newton approximation u^{n+1} = u^{n} + delta u */
+
+	  Mdiff = S*sol;                  										/* Storing H^1 vector */
+	  err = sqrt( tr(Mdiff)*sol )/sqrt( tr(Mdiffold)*solold); 				/* Computing tolerance norm */
+
+	  cout << "\n" << endl;
+	  cout << "Newton error = " << err << endl;
+	  cout << "\n" << endl;
+
+	  if(err<tol) break;                                      				/* stopping criterion */
+
+	  solold += sol; 														/* save sol for computing error later */
+	  Mdiffold = S*solold;                  								/* storing L^2 norm */
+	  errold = sqrt( tr(Mdiffold)*solold);  								/* Storing old error */
+
+	}
+
+	vx[] = vxold[]; vy[] = vyold[];
+
+
+
+
+} //
+
+
+////////////////////////////////////////////////////////////////////
+////////// Defining macro for Time-dependent NS equations //////////
+////////////////////////////////////////////////////////////////////
+
+
+// macro for solving the Navier-Stokes equations using Newton's method
+
+macro timeNS{
+
+	err = 1;
+
+	Aphi = aphi(Xh,Xh);
+	Aphi += Am;
+  	Aphi += A;
+	/*Aphi += A;*/ 
+
+	vxold = 0; vyold = 0;
+  	uxt[0] = vxold; uyt[0] = vyold;
+  	/*plot([up1,up2], cmm = "State at t=0");*/
+
+  	t0 = clock();
+  	for(int n=0;n<=m;n++){
+  		cout << "time = "+(dt*n) <<endl;
+	    real pow = (-1)*dt*n*10;
+
+	    real ex = exp(pow);
+
+	    gleft = ( 1 - (y-0.5)^2 )*(1-ex);
+    	gright = ( 1 - (y-0.5)^2 )*(1 - ex);
+
+    	
+    	Aconv = aconv(Xh,Xh);
+    	Aconv += Aphi;
+		set(Aconv, solver = UMFPACK);
+
+	    rhs = bb(0,Xh);
+	    b = bc(0,Xh);
+	    rhs += b; /*rhs  += rhsm;*/
+
+	    sol = Aconv^-1 * rhs;
+
+	    w1[] = sol; vx = w1; vy = w2; 
+
+	    vxold = vx; vyold = vy;
+	    uxt[n] = vxold; uyt[n] = vyold;
+
+	    plot([vx,vy], wait = 0);
+
+  	}
+  	t1 = clock();
+
+  	cout << "Time to solve NS:" << t1 - t0 << endl;
+
+
+} // EOM 
+
+
+
+//////////////////////////////////////////////////////////
+////////// Defining macro for Adjoint equations //////////
+//////////////////////////////////////////////////////////
+
+macro ADJsolve{
+
+	cout << "\n" << endl;
+	cout << "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++" << endl;
+	cout << "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++" << endl;
+	cout << "++ " << "Matrix Solved Adjoint" << endl;
+	cout << "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++" << endl;
+	cout << "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++" << endl;
+	cout << "\n" << endl;
+
+	Adjphi = adjphi(Xh,Xh, solver = "UMFPACK"); 						/* update porous and convective part of adjoint */
+	Adjphi += Adj;          											/* add the adjoint matrix */
+
+	adjrhs = adjbb(0,Xh);   											/* update the right-hand side */
+	adjrhs += adjb; 													/* Combining RHS and bc for the adjoint */
+
+	sol = Adjphi^-1 * adjrhs; 											/* Solving the linear system */							
+
+	w1[] = sol; vax = w1; vay = w2; pa = wp;							/* alot the data to velocity and pressure components */
+
+	cout << "\n" << endl;
+	cout << "Just solved adjoint" << endl;
+	cout << "\n" << endl;
+
+
+} //
+
+
+{ifstream gx("target/ux.txt"); gx >> udx[];
+}
+
+{ifstream gy("target/uy.txt"); gy >> udy[];
+}
+
+
+/////////////////////////////////////////////////////////////////////////
+////////// Defining macro for Time-dependent Adjoint equations //////////
+/////////////////////////////////////////////////////////////////////////
+
+macro timeADJOINT{
+
+	vaxold = 0; vayold = 0;
+	uax[m] = vapx; uay[m] = vapy;
+
+	t0 = clock();
+	for(i=1; i<=m; i++){
+		j = m-i;
+
+		cout << "time = "+(dt*j) <<endl;
+		if(j > 0){	
+			vxn = uxt[j-1]; vyn = uyt[j-1];	
+		}
+		else vxn = 0; vxm = 0;
+
+		vxold = uxt[j+1]; vyold = uyt[j+1];
+		vx = uxt[j]; vy = uyt[j];
+
+		    
+		g1 = (1+phi)*(vx - udx) + 2*alpha*vx;
+		g2 = (1+phi)*(vy - udy) + 2*alpha*vy;
+
+
+		Adjphi = adjphi(Xh,Xh);	/*for the pore*/
+		adjrhs = adjbb(0,Xh);						/*for the rhs of the adjoint*/
+		adjb = adjbc(0,Xh);						/*for the bc of the adjoint*/
+		adjcb = adjconv(0,Xh);						 /*for the rhs of the adjoint*/
+
+		Adjphi += Adj; Adjphi += Adjm; 
+		adjb += adjrhs; adjb += adjcb;
+
+		sol = Adjphi^-1 * adjb; 
+		w1[] = sol; vax = w1; vay = w2;
+
+		uax[j] = vax; uay[j] = vay;
+		vapx = vax; vapy = vay;
+
+	 }
+
+	 t1 = clock();
+
+	 cout << "Time to solve adjoint:" << t1 - t0 << endl;
+} //
+
+
+
+/////////////////////////////////////////////
+////////// Defining macro for PDAS //////////
+/////////////////////////////////////////////
+
+macro phsolve{
+	if(isitime == 0){
+			f = (-alp/(2*epsilon))*( vx^2 + vy^2 )  - (-ahat*alp/(2*epsilon))*( vx*vax + vy*vay ) 
+				+ 0.5*lambda*((vx - udx)^2 + (vy - udy)^2);	/* RHS of the variational inequality from the FOOS */
+		}
+
+	else{
+		f = (-alp/(2*epsilon))*( uxt[0]^2 + uyt[0]^2 )  - (-ahat*alp/(2*epsilon))*( uxt[0]*uax[0] + uyt[0]*uay[0] ) + (1./2)*lambda*((uxt[0] - udx)^2 + (uyt[0] - udy)^2)
+		+ (-alp/(2*epsilon))*( uxt[m]^2 + uyt[m]^2 )  - (-ahat*alp/(2*epsilon))*( uxt[m]*uax[m] + uyt[m]*uay[m] ) + (1./2)*lambda*((uxt[m] - udx)^2 + (uyt[m] - udy)^2);
+
+		f = f*0.5;
+
+		for(int i = 1; i <= m-1; i++){
+
+			f = f + (-alp/(2*epsilon))*( uxt[i]^2 + uyt[i]^2 )  - (-ahat*alp/(2*epsilon))*( uxt[i]*uax[i] + uyt[i]*uay[i] ) + (1./2)*lambda*((uxt[i] - udx)^2 + (uyt[i] - udy)^2);
+
+		}
+
+		f = f*dt*(1./T);
+	}
+
+	lambdav = 0;																														/* Initializing the Lagrange multiplier */
+	Ikp = 0;																															/* Inactive set for the upper bound */
+	Ikm = 0;																															/* Inactive set for the lower bound */
+	uhp = 1;																															/* Inatializing the phase-field */
+
+	err = 1;																															/* Initializing error */
+
+	for(int iter = 0; iter < maxiter ; ++iter){
+
+	  Akp = lambdav + c*(uhp - gp) > 0.;																								/* Update the upper bound active set */
+	  Akm = lambdav + c*(uhp - gm) < 0.;																								/* Update the lower bound active set */
+
+	  Mphi = aaphi(Ph,Ph, solver = UMFPACK);																							/* Update the Matrix for PDAS */
+	  rhsphi = aaphi(0,Ph);																												/* Update the Rhs */
+	  rhsphi = (-1)*rhsphi;																												/* Fix the sign of the RHS */
+	  rhsphi += bcphi;																													/* Fix boundary values for good measure */
+
+
+
+	  solphi = Mphi^-1 * rhsphi;																										/* Solve the linear system */
+	  uh[] = solphi;																													/* Store the solution */
+
+
+
+	  lambdav = (lambdav + c*(uh - gp ))*Akp + (lambdav + c*(uh - gm ))*Akm;															/* Update the Lagrange multiplier */
+
+	  solphiold = uh[] - uhp[];																											/* Store the iteration gap */
+
+	  Mdiffphi = M*solphiold;																											/* Vectorize for the error */
+
+	  err = sqrt(tr(Mdiffphi)*solphiold);																								/* Evaluate the error */
+
+	  cout << "k = "+iter << "|| phi_{k} - phi_{k-1} || = " << err << endl;
+	    
+	  if(err < 1*1e-6) break;
+
+	  uhp = uh;																															/* Update the old phase field */
+
+	}
+
+	dvh = uh - phi;																														/* Descent direction */
+
+} //
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

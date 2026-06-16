@@ -13,7 +13,7 @@ Preprint: https://arxiv.org/abs/2601.13293
 Citation
 --------
 
-If this code helps your research, please cite our paper:
+If this code helps your research, you can cite our paper:
 
 Michael Hinze, Christian Kahle, and John Sebastian H. Simon, "Long-time behavior of solutions to fluid dynamic shape optimization problems via phase-field method", to appear in Interface and Free Boundaries, arXiv:2601.13293, 2026.
 

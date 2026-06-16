@@ -3,6 +3,20 @@ Phase-field based shape optimization for Navier--Stokes flow problems using Free
 
 The project supports stationary and time-dependent optimization using Newton solver for the stationary Navier--Stokes equation and implicit/explicit scheme for the time-dependent version, adjoint equations, PDAS phase-field updates, Brinkman penalization, and Armijo backtracking.
 
+Related work
+------------
+
+This code is related to the work "Long-time behavior of solutions to a fluid dynamic shape optimization problem via phase-field method" by Michael Hinze, Christian Kahle, and John Sebastian H. Simon. The paper studies time-dependent Navier--Stokes shape and topology optimization using a stationary phase-field and porous-media approximation, and proves convergence of time-dependent minimizers to stationary minimizers as the time horizon tends to infinity.
+
+Preprint: https://arxiv.org/abs/2601.13293
+
+Citation
+--------
+
+If this code helps your research, please cite our paper:
+
+Michael Hinze, Christian Kahle, and John Sebastian H. Simon, "Long-time behavior of solutions to fluid dynamic shape optimization problems via phase-field method", to appear in Interface and Free Boundaries, arXiv:2601.13293, 2026.
+
 Files
 -----
 
